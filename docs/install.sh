@@ -5,80 +5,77 @@
 
 set -e
 
-
+# 显示Spug标志
 function spug_banner() {
+cat << "EOF"
 
-echo "                           ";
-echo " ####  #####  #    #  #### ";
-echo "#      #    # #    # #    #";
-echo " ####  #    # #    # #     ";
-echo "     # #####  #    # #  ###";
-echo "#    # #      #    # #    #";
-echo " ####  #       ####   #### ";
-echo "                           ";
+ ####  #####  #    #  #### 
+#      #    # #    # #    #
+ ####  #    # #    # #     
+     # #####  #    # #  ###
+#    # #      #    # #    #
+ ####  #       ####   #### 
 
+EOF
 }
 
-
+# 系统依赖安装
 function init_system_lib() {
     source /etc/os-release
+    local packages
     case $ID in
         centos|fedora|rhel)
-            echo "开始安装/更新可能缺少的依赖: git mariadb-server mariadb-devel python3-devel gcc openldap-devel redis nginx supervisor python36"
-            yum install -y epel-release
-            yum install -y git mariadb-server mariadb-devel python3-devel gcc openldap-devel redis nginx supervisor python36
+            packages="git mariadb-server mariadb-devel python3-devel gcc openldap-devel redis nginx supervisor python36"
+            yum install -y epel-release $packages
             sed -i 's/ default_server//g' /etc/nginx/nginx.conf
-            MYSQL_CONF=/etc/my.cnf.d/spug.cnf
-            SUPERVISOR_CONF=/etc/supervisord.d/spug.ini
-            REDIS_SRV=redis
-            SUPERVISOR_SRV=supervisord
+            MYSQL_CONF="/etc/my.cnf.d/spug.cnf"
+            SUPERVISOR_CONF="/etc/supervisord.d/spug.ini"
+            REDIS_SRV="redis"
+            SUPERVISOR_SRV="supervisord"
             ;;
-
         debian|ubuntu|devuan)
-            echo "开始安装/更新可能缺少的依赖: git mariadb-server libmariadbd-dev python3-venv libsasl2-dev libldap2-dev redis-server nginx supervisor"
-            apt update
-            apt install -y git mariadb-server libmariadbd-dev python3-dev python3-venv libsasl2-dev libldap2-dev redis-server nginx supervisor
+            packages="git mariadb-server libmariadbd-dev python3-dev python3-venv libsasl2-dev libldap2-dev redis-server nginx supervisor"
+            apt update && apt install -y $packages
             rm -f /etc/nginx/sites-enabled/default
-            MYSQL_CONF=/etc/mysql/conf.d/spug.cnf
-            SUPERVISOR_CONF=/etc/supervisor/conf.d/spug.conf
-            REDIS_SRV=redis-server
-            SUPERVISOR_SRV=supervisor
+            MYSQL_CONF="/etc/mysql/conf.d/spug.cnf"
+            SUPERVISOR_CONF="/etc/supervisor/conf.d/spug.conf"
+            REDIS_SRV="redis-server"
+            SUPERVISOR_SRV="supervisor"
             ;;
         *)
+            echo "不支持的操作系统: $ID"
             exit 1
             ;;
     esac
 }
 
-
+# 安装Spug
 function install_spug() {
-  echo "开始安装Spug..."
-  mkdir -p /data
-  cd /data
-  git clone --depth=1 https://gitee.com/openspug/spug.git
-  curl -o /tmp/web_latest.tar.gz https://spug.dev/installer/web_latest.tar.gz
-  tar xf /tmp/web_latest.tar.gz -C spug/spug_web/
-  cd spug/spug_api
-  python3 -m venv venv
-  source venv/bin/activate
+    echo "开始安装Spug..."
+    mkdir -p /data
+    cd /data
+    git clone --depth=1 https://gitee.com/openspug/spug.git
+    curl -o /tmp/web_latest.tar.gz https://spug.dev/installer/web_latest.tar.gz
+    tar xf /tmp/web_latest.tar.gz -C spug/spug_web/
+    cd spug/spug_api
+    python3 -m venv venv
+    source venv/bin/activate
 
-  pip install wheel -i https://pypi.doubanio.com/simple/
-  pip install gunicorn mysqlclient -i https://pypi.doubanio.com/simple/
-  pip install -r requirements.txt -i https://pypi.doubanio.com/simple/
+    pip install -i https://pypi.doubanio.com/simple/ wheel gunicorn mysqlclient -r requirements.txt
 }
 
-
+# 配置Spug
 function setup_conf() {
+    echo "开始配置Spug配置..."
 
-  echo "开始配置Spug配置..."
-# mysql conf
-cat << EOF > $MYSQL_CONF
+    # MySQL 配置
+    cat << EOF > $MYSQL_CONF
 [mysqld]
 bind-address=127.0.0.1
 EOF
 
-# spug conf
-cat << EOF > spug/overrides.py
+    # Spug 配置
+    cat << EOF > spug/overrides.py
 DEBUG = False
 ALLOWED_HOSTS = ['127.0.0.1']
 
@@ -98,7 +95,8 @@ DATABASES = {
 }
 EOF
 
-cat << EOF > $SUPERVISOR_CONF
+    # Supervisor 配置
+    cat << EOF > $SUPERVISOR_CONF
 [program:spug-api]
 command = bash /data/spug/spug_api/tools/start-api.sh
 autostart = true
@@ -130,60 +128,49 @@ stdout_logfile = /data/spug/spug_api/logs/scheduler.log
 redirect_stderr = true
 EOF
 
-cat << EOF > /etc/nginx/conf.d/spug.conf
+    # Nginx 配置
+    cat << EOF > /etc/nginx/conf.d/spug.conf
 server {
-        listen 80 default_server;
-        root /data/spug/spug_web/build/;
+    listen 80 default_server;
+    root /data/spug/spug_web/build/;
 
-        location ^~ /api/ {
-                rewrite ^/api(.*) \$1 break;
-                proxy_pass http://127.0.0.1:9001;
-                proxy_redirect off;
-                proxy_set_header X-Real-IP \$remote_addr;
-        }
+    location ^~ /api/ {
+        rewrite ^/api(.*) \$1 break;
+        proxy_pass http://127.0.0.1:9001;
+        proxy_redirect off;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }
 
-        location ^~ /api/ws/ {
-                rewrite ^/api(.*) \$1 break;
-                proxy_pass http://127.0.0.1:9002;
-                proxy_http_version 1.1;
-                proxy_set_header Upgrade \$http_upgrade;
-                proxy_set_header Connection "Upgrade";
-                proxy_set_header X-Real-IP \$remote_addr;
-        }
+    location ^~ /api/ws/ {
+        rewrite ^/api(.*) \$1 break;
+        proxy_pass http://127.0.0.1:9002;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header X-Real-IP \$remote_addr;
+    }
 
-        error_page 404 /index.html;
+    error_page 404 /index.html;
 }
 EOF
 
+    systemctl enable --now mariadb $REDIS_SRV nginx $SUPERVISOR_SRV
 
-systemctl start mariadb
-systemctl enable mariadb
+    mysql -e "CREATE DATABASE spug DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+    mysql -e "GRANT ALL ON spug.* TO spug@127.0.0.1 IDENTIFIED BY 'spug.dev'; FLUSH PRIVILEGES;"
 
-mysql -e "create database spug default character set utf8mb4 collate utf8mb4_unicode_ci;"
-mysql -e "grant all on spug.* to spug@127.0.0.1 identified by 'spug.dev'"
-mysql -e "flush privileges"
+    python manage.py initdb
+    python manage.py useradd -u admin -p spug.dev -s -n 管理员
 
-python manage.py initdb
-python manage.py useradd -u admin -p spug.dev -s -n 管理员
-
-
-systemctl enable nginx
-systemctl enable $REDIS_SRV
-systemctl enable $SUPERVISOR_SRV
-
-systemctl restart nginx
-systemctl start $REDIS_SRV
-systemctl restart $SUPERVISOR_SRV
-
+    systemctl restart $SUPERVISOR_SRV nginx
 }
-
 
 spug_banner
 init_system_lib
 install_spug
 setup_conf
 
-echo -e "\n\n\033[33m安全警告：默认的数据库和Redis服务并不安全，请确保其仅监听在127.0.0.1，推荐参考官网文档自行加固安全配置！\033[0m"
+echo -e "\n\033[33m安全警告：请根据文档加强数据库和Redis的安全性！\033[0m"
 echo -e "\033[32m安装成功！\033[0m"
-echo "默认管理员账户：admin  密码：spug.dev"
-echo "默认数据库用户：spug   密码：spug.dev"
+echo "管理员账户：admin  密码：spug.dev"
+echo "数据库用户：spug   密码：spug.dev"
